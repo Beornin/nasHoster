@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Drive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = { darkMode: 'class' }
+    </script>
+    <style>
+        /* CSS Variable for dynamic grid sizing */
+        :root {
+            --card-size: 200px;
+        }
+        
+        .file-card:hover .overlay-actions { opacity: 1; }
+        .truncate-2-lines {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        
+        /* The Grid uses the CSS variable */
+        #file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(var(--card-size), 1fr));
+            gap: 1rem;
+        }
+
+        /* Image Styling */
+        .thumb-img {
+            width: 100%;
+            aspect-ratio: 16 / 10;
+            object-fit: cover;
+            border-radius: 6px;
+            background-color: #f3f4f6;
+        }
+        .dark .thumb-img {
+            background-color: #374151;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-100 h-screen flex flex-col overflow-hidden relative">
+
+    <header class="bg-white dark:bg-gray-800 shadow p-4 z-20 flex flex-col md:flex-row justify-between items-center shrink-0 gap-4">
+        <div class="flex items-center gap-4">
+            <div class="text-2xl text-blue-600 dark:text-blue-400 font-bold">
+                <i class="fa-solid fa-server mr-2"></i>LAN Drive
+            </div>
+        </div>
+
+        <div class="flex items-center gap-4 w-full md:w-auto">
+            
+            <div class="hidden md:flex items-center gap-2 mr-4 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full border border-gray-200 dark:border-gray-600">
+                <i class="fa-solid fa-image text-xs text-gray-400"></i>
+                <input type="range" id="sizeSlider" min="120" max="400" value="200" class="w-24 accent-blue-500 cursor-pointer">
+                <i class="fa-solid fa-image text-lg text-gray-400"></i>
+            </div>
+
+            <div class="relative flex-1 md:flex-none">
+                <input type="text" id="searchInput" placeholder="Search..." 
+                    class="w-full md:w-64 px-4 py-2 rounded-full border dark:bg-gray-700 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                    onkeyup="if(event.key === 'Enter') doSearch()">
+            </div>
+            <button onclick="triggerScan()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition shadow flex items-center gap-2 shrink-0">
+                <i class="fa-solid fa-sync"></i>
+            </button>
+        </div>
+    </header>
+
+    <div class="bg-gray-50 dark:bg-gray-800 border-b dark:border-gray-700 px-6 py-2 flex items-center gap-2 text-sm overflow-x-auto whitespace-nowrap shrink-0" id="breadcrumbs"></div>
+
+    <main class="flex-1 overflow-y-auto p-6 scroll-smooth">
+        <div id="file-grid" class="pb-12"></div>
+        
+        <div id="empty-state" class="hidden flex flex-col items-center justify-center h-full text-gray-400">
+            <i class="fa-regular fa-folder-open text-6xl mb-4"></i>
+            <p class="text-xl">Empty Folder</p>
+        </div>
+    </main>
+
+    <div id="scan-indicator" class="hidden fixed bottom-0 left-0 right-0 bg-blue-600 text-white px-4 py-2 text-xs font-mono z-40 items-center justify-between shadow-lg">
+        <div class="flex items-center gap-3 overflow-hidden w-full">
+            <i class="fa-solid fa-circle-notch fa-spin shrink-0 text-white/80"></i>
+            <span id="scan-text" class="truncate w-full cursor-default">Initializing...</span>
+        </div>
+        <button onclick="hideStatusBar()" class="ml-4 text-white/70 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+    </div>
+
+    <div id="previewModal" class="hidden fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 backdrop-blur-sm">
+        <div class="absolute top-0 left-0 right-0 p-4 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent z-50">
+            <h2 id="previewTitle" class="text-white font-medium truncate max-w-lg">Preview</h2>
+            <button onclick="closePreview()" class="text-white hover:text-red-500 text-2xl"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div id="previewContent" class="w-full h-full flex items-center justify-center overflow-hidden"></div>
+    </div>
+
+    <script>
+        let currentPath = "";
+        let currentFiles = [];
+
+        // --- SLIDER LOGIC ---
+        const slider = document.getElementById('sizeSlider');
+        const root = document.documentElement;
+        
+        slider.addEventListener('input', (e) => {
+            const size = e.target.value;
+            // Update CSS variable to resize grid
+            root.style.setProperty('--card-size', size + 'px');
+            
+            // Debounce re-render slightly to avoid flickering while dragging
+            if(this.debounceTimer) clearTimeout(this.debounceTimer);
+            this.debounceTimer = setTimeout(() => {
+                renderGrid(currentFiles);
+            }, 100); 
+        });
+
+        // --- ICONS & GRID ---
+
+        function getIcon(mime, isFolder) {
+            if (isFolder) return '<i class="fa-solid fa-folder text-yellow-400 text-6xl drop-shadow-sm"></i>';
+            if (!mime) return '<i class="fa-solid fa-file text-gray-400 text-5xl"></i>';
+            if (mime.startsWith('image')) return '<i class="fa-solid fa-file-image text-purple-500 text-5xl"></i>';
+            if (mime.startsWith('video')) return '<i class="fa-solid fa-file-video text-red-500 text-5xl"></i>';
+            if (mime.includes('pdf')) return '<i class="fa-solid fa-file-pdf text-red-600 text-5xl"></i>';
+            return '<i class="fa-solid fa-file text-gray-400 text-5xl"></i>';
+        }
+
+        async function loadFiles(path = "") {
+            currentPath = path;
+            renderBreadcrumbs(path);
+            const grid = document.getElementById('file-grid');
+            grid.innerHTML = '<div class="col-span-full text-center py-20"><i class="fa-solid fa-spinner fa-spin text-4xl text-blue-500"></i></div>';
+            
+            try {
+                const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+                currentFiles = await res.json();
+                renderGrid(currentFiles);
+            } catch (e) { console.error(e); }
+        }
+
+        async function doSearch() {
+            const q = document.getElementById('searchInput').value;
+            if(!q) return loadFiles(currentPath);
+            const res = await fetch(`/api/files?q=${encodeURIComponent(q)}`);
+            currentFiles = await res.json();
+            renderGrid(currentFiles);
+        }
+
+        function renderGrid(files) {
+            const grid = document.getElementById('file-grid');
+            grid.innerHTML = "";
+            if (files.length === 0) {
+                document.getElementById('empty-state').classList.remove('hidden');
+                return;
+            }
+            document.getElementById('empty-state').classList.add('hidden');
+
+            // Determine requested size based on slider value
+            const sliderVal = parseInt(slider.value);
+            const sizeParam = sliderVal > 250 ? 'large' : 'small';
+
+            files.forEach(f => {
+                const safePath = f.path.replace(/'/g, "\\'");
+                const safeName = f.name.replace(/'/g, "\\'");
+                const safeMime = (f.mime || "").replace(/'/g, "\\'");
+                
+                let visualContent;
+                
+                // If the DB says we have a thumbnail, load it via API
+                if (!f.is_folder && f.has_thumbnail) {
+                    // Cache buster not strictly needed with ID, but good for dev
+                    visualContent = `<img src="/api/thumb/${f.id}/${sizeParam}" class="thumb-img" loading="lazy" alt="${f.name}">`;
+                } else {
+                    visualContent = `<div class="mb-3 transform group-hover:scale-110 transition duration-200">${getIcon(f.mime, f.is_folder)}</div>`;
+                }
+
+                const clickAction = f.is_folder 
+                    ? `onclick="loadFiles('${safePath}')"`
+                    : `onclick="openPreview('${safePath}', '${safeMime}', '${safeName}')"`;
+
+                const card = `
+                    <div class="file-card group bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-lg hover:border-blue-300 transition p-4 flex flex-col items-center text-center cursor-pointer relative" ${clickAction}>
+                        ${visualContent}
+                        <div class="text-sm font-medium text-gray-700 dark:text-gray-200 truncate-2-lines w-full mt-2" title="${f.name}">
+                            ${f.name}
+                        </div>
+                    </div>
+                `;
+                grid.insertAdjacentHTML('beforeend', card);
+            });
+        }
+
+        function renderBreadcrumbs(path) {
+            const container = document.getElementById('breadcrumbs');
+            const parts = path.split('/').filter(p => p);
+            let html = `<span class="cursor-pointer text-blue-600 hover:underline" onclick="loadFiles('')"><i class="fa-solid fa-house"></i></span>`;
+            let accum = "";
+            parts.forEach(p => {
+                accum += (accum ? "/" : "") + p;
+                html += ` <span class="text-gray-400">/</span> <span class="cursor-pointer hover:text-blue-500" onclick="loadFiles('${accum.replace(/'/g, "\\'")}')">${p}</span>`;
+            });
+            container.innerHTML = html;
+        }
+
+        // --- PREVIEW / SCAN (Existing Logic) ---
+        async function triggerScan() {
+            if(!confirm("Start scanning?")) return;
+            await fetch('/api/scan', {method: 'POST'});
+            pollScanStatus();
+        }
+
+        function pollScanStatus() {
+            const interval = setInterval(async () => {
+                const res = await fetch('/api/scan/status');
+                const data = await res.json();
+                const ind = document.getElementById('scan-indicator');
+                if(data.running) {
+                    ind.classList.remove('hidden');
+                    ind.classList.add('flex');
+                    document.getElementById('scan-text').innerText = data.progress;
+                } else {
+                    ind.classList.add('hidden');
+                    ind.classList.remove('flex');
+                }
+            }, 1500);
+        }
+
+        function openPreview(path, mime, name) {
+            const modal = document.getElementById('previewModal');
+            const container = document.getElementById('previewContent');
+            const title = document.getElementById('previewTitle');
+            
+            container.innerHTML = ''; 
+            title.innerText = name;
+            modal.classList.remove('hidden');
+
+            const url = `/api/preview?path=${encodeURIComponent(path)}`;
+            let el;
+
+            if (mime && mime.startsWith('image')) {
+                el = document.createElement('img');
+                el.className = "max-h-full max-w-full object-contain shadow-2xl rounded";
+                el.src = url;
+            } else if (mime && mime.startsWith('video')) {
+                el = document.createElement('video');
+                el.className = "max-h-full max-w-full shadow-2xl bg-black rounded";
+                el.controls = true;
+                el.autoplay = true;
+                el.src = url;
+            } else {
+                window.location.href = `/api/download?path=${encodeURIComponent(path)}`;
+                modal.classList.add('hidden');
+                return;
+            }
+            container.appendChild(el);
+        }
+
+        function closePreview() {
+            document.getElementById('previewModal').classList.add('hidden');
+            document.getElementById('previewContent').innerHTML = '';
+        }
+
+        function hideStatusBar() {
+            document.getElementById('scan-indicator').classList.add('hidden');
+        }
+
+        loadFiles();
+        pollScanStatus();
+    </script>
+</body>
+</html>

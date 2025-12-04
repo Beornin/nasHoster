@@ -1,0 +1,9 @@
+/.venv
+/instance
+/venv
+.env
+__pycache__/
+*.pyc
+instance/
+.DS_Store
+/static
