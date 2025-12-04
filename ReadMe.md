@@ -1,6 +1,3 @@
-Here is a comprehensive `README.md` for your application. It covers installation, configuration (including the FFmpeg path setup), database architecture, and usage features.
-
------
 
 # LAN Drive Indexer & Viewer
 
